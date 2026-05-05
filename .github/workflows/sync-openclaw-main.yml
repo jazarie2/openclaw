@@ -1,0 +1,56 @@
+name: Sync OpenClaw Main
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-openclaw-main-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  sync-main:
+    if: github.repository == 'jazarie2/openclaw'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward fork main from upstream
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UPSTREAM_BRANCH: main
+          UPSTREAM_REPO: openclaw/openclaw
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}:refs/remotes/upstream/${UPSTREAM_BRANCH}"
+
+          origin_sha="$(git rev-parse refs/remotes/origin/main)"
+          upstream_sha="$(git rev-parse "refs/remotes/upstream/${UPSTREAM_BRANCH}")"
+
+          if [ "$origin_sha" = "$upstream_sha" ]; then
+            echo "origin/main is already up to date with ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}."
+            exit 0
+          fi
+
+          # Refuse to rewrite fork-specific main commits; only fast-forward upstream.
+          if ! git merge-base --is-ancestor refs/remotes/origin/main "refs/remotes/upstream/${UPSTREAM_BRANCH}"; then
+            echo "::error::origin/main has diverged from ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}; refusing non-fast-forward sync."
+            git log --oneline --left-right --boundary "refs/remotes/origin/main...refs/remotes/upstream/${UPSTREAM_BRANCH}"
+            exit 1
+          fi
+
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/remotes/upstream/${UPSTREAM_BRANCH}:refs/heads/main"
